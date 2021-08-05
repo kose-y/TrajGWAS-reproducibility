@@ -1,0 +1,357 @@
+---
+title: "Biomarker extraction from primary care for TrajGWAS"
+output: html_notebook
+---
+
+This Rmd extracts biomarkers from primary care data to be used in TrajGWAS analysis.
+```{r}
+#Provide the path of the config file
+source("/xdisk/jzhou/aubreyjensen/UKB_48152/pheno/scripts/config.R")
+```
+
+```{r, message=F}
+library(dplyr)
+library(data.table)
+library(tictoc)
+library(knitr)
+library(tictoc)
+library(ggplot2)
+library(tidyr)
+```
+
+Read in the necessary data. It is large and may require use of HPC cluster. 
+```{r, message=F}
+#gp_clinical table, pre-cleaned with the term descriptions added from dictonary. 
+gp_clinical <- fread(paste0(record_dir, "gp_clinical_wdescriptions.txt"))
+
+#A complete dictionary of read2, read3, and TPP Local codes and descriptions.
+full_dict <- fread(paste0(dict_dir, "read2_read3_TPPLocal_combined_dict.txt"))
+
+#Summary-level table of each clinical term and the number of individuals who have the term in their records. 
+gp_clinical_n <- fread(paste0(record_dir, "gp_clinical_summary.txt")) %>% 
+  arrange(desc(n_indiv)) %>%
+  left_join(full_dict %>% 
+              select(-terminology)) %>%
+  distinct()
+```
+
+Define the clinical terms to extract from gp_clinical for each biomarker. Each biomarker gets a string to be used in a grepl pattern matching query, and as such different patterns should be separated by '|', and brackets used to denote multiple possible patterns to match.
+```{r}
+BP_codes <- "^246[.cdgABCDEFGJNPQRSTVWXY012345679]|^XaF4[abFLOS]|^XaJ2[EFGH]|^XaKF[xw]|^G20"
+HDL_codes <- '^44d[23]|^X772M|^44P[5BC]|^XaEVr'
+LDL_codes <- '^44d[45]|^X772N|^44P[6DE]|^XaEVs'   #X772N does not return anything
+totchol_codes <- "^44P[.12349HJKZ]|^XE2eD|^XSK14|^XaFs9|^XaIRd|^XaJe9|^XaLux" 
+triglyc_codes <- '^44e|^44Q|^X772O|^XE2q9' 
+fastgluc_codes <- "^44[fg]1"
+randgluc_codes <- "^44[fg][0\\.]|^44TA|XM0ly"
+a1c_codes <- "^XaPbt|^XaERp|^X772q|^42W[12345Z\\.]\\.|^44TB\\."
+height_weight_BMI_codes <- "^XaCDR|^XaJJH|^XaJqk|^XaZcl|^22K|^229|^22A|^162[23]|X76CG|XE1h4|XM01G|Xa7wI"
+```
+
+# BP
+```{r, message=F, warning=F}
+bp <- gp_clinical %>%
+  filter(grepl(BP_codes, code)) %>%
+  filter(value1 != "" | value2 != "" | value3 != "")  %>%
+  mutate(value1 = as.numeric(value1), value2 = as.numeric(value2), value3 = as.numeric(value3)) 
+
+bp$term_description[bp$term_description == ""] <- NA
+bp$value3[bp$value3 < 10] <- NA
+
+#Separate the data into two types of record: One where 2 values are given in 1 record (e.g. Systolic and Diastolic) and another where there is only one value (i.e Systolic only or Diastolic only) given per record. 
+
+#multiple values per record. Take the larger value to be systolic and the smaller value to be diastolic. Filter out any records where either of these values are 0.
+bp_mult <- bp %>% 
+  rowwise() %>%
+  filter(sum(!is.na(value1), !is.na(value2), !is.na(value3)) == 2) %>%
+  ungroup() %>%
+  mutate(Systolic_bp_pc = pmax(value1, value2, value3, na.rm=T)) %>%
+  mutate(Diastolic_bp_pc = pmin(value1, value2, value3, na.rm=T)) %>%
+  filter(Systolic_bp_pc != 0 & Diastolic_bp_pc != 0)
+
+#one value per record. create one column with the value, where previously there were three columns that may contain the value. 
+bp_single <- bp %>% 
+  rowwise() %>%
+  filter(sum(!is.na(value1), !is.na(value2), !is.na(value3)) == 1) %>%
+  ungroup() %>%
+  mutate(value = coalesce(value1, value2, value3)) %>%
+  filter(value != 0) %>%
+  arrange(eid, event_dt) %>%
+  mutate(bp_type =  ifelse(grepl("systolic", term_description, ignore.case=T), "Systolic_bp_pc",
+               ifelse(grepl("diastolic", term_description, ignore.case = T), "Diastolic_bp_pc", "Unknown"))) %>%
+  select(-value1, -value2, -value3) %>%
+  distinct()
+
+#Here are the results for single type:
+bp_single %>% 
+  group_by(code, term_description, bp_type) %>% 
+  summarize(n=n(), mean=round(mean(value, 1))) %>% 
+  arrange(bp_type, desc(n)) 
+
+
+#Here I look at the 'Unknown' codes to see if I can figure out whether they are systolic or diastolic.  For many of these, the same code is given twice, each with a different value. Sometimes an 'unknown' code is a duplicate of a systolic or diastolic measurement. If there are two *unique* values given per ID/date, then we can assume they are systolic (higher) and diastolic (lower). Otherwise, I discard that set of values. 
+unknowns <- bp_single %>%
+  group_by(eid, event_dt) %>%
+  filter(sum(bp_type == "Unknown") > 0) %>%
+  mutate(n = length(unique(value))) %>%
+  filter(n == 2) %>%
+  mutate(Systolic_bp_pc = max(value)) %>%
+  mutate(Diastolic_bp_pc = min(value)) %>%
+  group_by(eid, event_dt, value) %>%
+  filter(row_number() == 1) %>%
+  ungroup() %>%
+  group_by(eid, event_dt) %>%
+  mutate(code_systolic = code[value == max(value)], code_diastolic = code[which(value == min(value))], 
+         term_description_systolic = term_description[which(value == max(value))], 
+         term_description_diastolic = term_description[which(value == min(value))])
+
+#Prepare for merging
+bp_single_less <- bp_single %>% 
+  distinct(eid, data_provider, event_dt, value, bp_type, .keep_all = T) %>%
+  group_by(eid, event_dt) %>%
+  filter(sum(bp_type == "Systolic_bp_pc") == 1 & sum(bp_type == "Diastolic_bp_pc") == 1) %>%
+  filter(bp_type != "Unknown")
+
+systolic <- bp_single_less %>%
+  filter(bp_type == "Systolic_bp_pc") %>%
+  dplyr::rename(code_systolic = code, Systolic_bp_pc = value, term_description_systolic = term_description) %>%
+  select(-bp_type)
+
+diastolic <- bp_single_less %>%
+  filter(bp_type == "Diastolic_bp_pc") %>%
+  dplyr::rename(code_diastolic = code, Diastolic_bp_pc = value, term_description_diastolic = term_description) %>%
+  select(-bp_type)
+        
+bp_single_wide <- full_join(systolic, diastolic)
+
+#Combine each of the cleaned subsets and implement some common sense filters (45 < Systolic bp < 300, 30 < Diastolic bp < Systolic bp) :
+unknowns_less <- unknowns %>% 
+  select(-term_description, -value, -bp_type, -code, -n) %>%
+  distinct()
+
+bp_mult_less <- bp_mult %>% 
+  dplyr::rename(term_description_both = term_description) %>%
+  dplyr::rename(code_both = code) %>%
+  select(eid, event_dt, data_provider, terminology, Systolic_bp_pc, Diastolic_bp_pc, code_both, term_description_both) %>%
+  distinct()
+
+full_bp_clean <- full_join(unknowns_less, bp_single_wide) %>%
+  full_join(bp_mult_less) %>%
+  filter(Systolic_bp_pc > Diastolic_bp_pc) %>%
+  filter(Systolic_bp_pc >= 45 & Systolic_bp_pc <= 300) %>%
+  filter(Diastolic_bp_pc >= 30) %>%
+  distinct(eid, event_dt, Systolic_bp_pc, Diastolic_bp_pc, .keep_all=T)
+```
+
+# Total cholesterol
+```{r, message=F, warning=F}
+totchol <- gp_clinical %>%
+  filter(grepl(totchol_codes, code)) %>% 
+  mutate(value1_numeric = as.numeric(value1), value2_numeric = as.numeric(value2), value3_numeric = as.numeric(value3)) %>%
+  mutate(totchol = coalesce(value1_numeric, value2_numeric, value3_numeric)) %>%
+  filter(totchol > 0.5 & totchol < 30) %>%
+  filter(!(value3 %in% c("MEA001", "mg/mmol", "%", "MEA090", "MEA093", "MEA099", "MEA110", "MEA142", "MEA156", "mmo", 
+                         "mmol", "mmol/d", "mOsm/kg", "mPa/s", "nmol/l", "U/mL", "umol/L")))
+
+totchol %>% group_by(code, term_description) %>% summarize(n=n()) %>% arrange(desc(n)) %>% kable()
+
+ggplot(data=totchol) + geom_density(aes(x=totchol, color= substr(code, 0,3))) + xlim(0,10) + theme_minimal()
+```
+
+# HDL
+```{r, warning=F, message=F}
+HDL <- gp_clinical %>%
+  filter(grepl(HDL_codes, code)) %>% 
+  mutate(value1_numeric = as.numeric(value1), value2_numeric = as.numeric(value2), value3_numeric = as.numeric(value3)) %>%
+  mutate(HDL = coalesce(value1_numeric, value2_numeric, value3_numeric)) %>%
+  filter(HDL > 0 & HDL < 10) %>%
+  filter(!(value3 %in% c("09", "MEA082", "MEA095", "MEA099", "MEA104", "MEA151", "mmol", "mOsm/kg", "mg/mmol")))
+
+HDL %>% group_by(code, term_description) %>% summarize(n=n()) %>% arrange(desc(n)) %>% kable()
+
+ggplot(data=HDL) + geom_density(aes(x=HDL, color= substr(code, 0,3))) + xlim(0,7.5) + theme_minimal()
+```
+
+# LDL
+```{r, warning=F, message=F}
+LDL <- gp_clinical %>%
+  filter(grepl(LDL_codes, code)) %>% 
+  mutate(value1_numeric = as.numeric(value1), value2_numeric = as.numeric(value2), value3_numeric = as.numeric(value3)) %>%
+  mutate(LDL = coalesce(value1_numeric, value2_numeric, value3_numeric)) %>%
+  filter(LDL > 0 & LDL < 30) %>%
+  filter(!(value3 %in% c("MEA142", "MEA151")))
+
+LDL %>% group_by(code, term_description) %>% summarize(n=n()) %>% arrange(desc(n)) %>% kable()
+
+ggplot(data=LDL) + geom_density(aes(x=LDL, color= substr(code, 0,3))) + xlim(0,10) + theme_minimal()
+```
+
+# Triglycerides
+```{r, warning=F, message=F}
+triglycerides <- gp_clinical %>%
+  filter(grepl(triglyc_codes, code)) %>%
+  mutate(value1_numeric = as.numeric(value1), value2_numeric = as.numeric(value2), value3_numeric = as.numeric(value3)) %>%
+  mutate(triglyc = coalesce(value1_numeric, value2_numeric, value3_numeric)) %>%
+  filter(triglyc > 0 & triglyc < 30) %>%
+  filter(!(value3 %in% c("g", "g/l", "MEA099", "MEA156")))
+
+triglycerides %>% group_by(code, term_description) %>% summarize(n=n()) %>% arrange(desc(n)) %>% kable()
+ggplot(data=triglycerides) + geom_density(aes(x=triglyc, color= substr(code, 0,3))) + xlim(0,7.5) + theme_minimal()
+```
+
+# Fasting Glucose
+```{r, message=F, warning=F}
+fastgluc <- gp_clinical %>%
+  filter(grepl(fastgluc_codes, code)) %>% 
+  mutate(value1_numeric = as.numeric(value1), value2_numeric = as.numeric(value2), value3_numeric = as.numeric(value3)) %>%
+  mutate(fastgluc = coalesce(value1_numeric, value2_numeric, value3_numeric)) %>%
+  filter(fastgluc > 0 & fastgluc < 60) %>%
+  filter(value3 %in% c("", "MEA000", "MEA061", "MEA096", "MEA194", "Mmol/L", "Unknown", "mmol/L", "mmol/l", "mU/l", "units"))
+
+fastgluc %>% group_by(code, term_description) %>% summarize(n=n()) %>% arrange(desc(n)) %>% kable()
+
+ggplot(data=fastgluc) + geom_density(aes(x=fastgluc, color= substr(code, 0,3))) + xlim(0,20) + theme_minimal()
+```
+
+# Random glucose
+```{r}
+randgluc <- gp_clinical %>%
+  filter(grepl(randgluc_codes, code)) %>% 
+  mutate(value1_numeric = as.numeric(value1), value2_numeric = as.numeric(value2), value3_numeric = as.numeric(value3)) %>%
+  mutate(randgluc = coalesce(value1_numeric, value2_numeric, value3_numeric)) %>%
+  filter(randgluc > 0 & randgluc < 60) %>%
+  filter(value3 %in% c("", "MEA000", "MEA061", "MEA096", "MEA194", "Mmol/L", "Unknown", "mmol/L", "mmol/l", "mU/l", "units"))
+
+randgluc %>% group_by(code, term_description) %>% summarize(n=n()) %>% arrange(desc(n)) %>% kable()
+
+ggplot(data=randgluc) + geom_density(aes(x=randgluc, color= substr(code, 0,3))) + xlim(0,30) + theme_minimal()
+```
+
+# HbA1c
+```{r}
+a1c <- gp_clinical %>%
+  filter(grepl(a1c_codes, code)) %>%
+  mutate(value1_numeric = as.numeric(value1), value2_numeric = as.numeric(value2), value3_numeric = as.numeric(value3)) %>%
+  mutate(hba1c = coalesce(value1_numeric, value2_numeric, value3_numeric)) %>%
+  filter(hba1c > 0) %>%
+  mutate(value3 = toupper(value3)) %>%
+  mutate(value3 = ifelse(value3 %in%  c("MEA000", "MMOL/M", "MEA097", "UNKNOWN", "MEA001", "%", "HBA1C", 
+                                        "%TOTAL HB", "% TOTAL HB", "MEA215", "MMOL/MOL HB", "PER CENT", "%TOTAL"), "", value3)) %>%
+  mutate(units = ifelse(value3 != "", value3, 
+                        ifelse(code %in% c("XaPbt", "42W5."), "MMOL/MOL", "%"))) %>%
+  filter(units %in% c("%", "MMOL/MOL")) %>%
+  mutate(hba1c_percent = ifelse(units == "%", round(hba1c, 1), round(hba1c/10.929 + 2.15, 1))) %>%
+  mutate(hba1c_mmol_mol = ifelse(units =="%", round(10.929 * (hba1c - 2.15), 1), round(hba1c, 1))) %>%
+  filter(hba1c_percent > 4 & hba1c_percent < 18) %>%
+  dplyr::rename(original_unit = units)
+
+ggplot(data=a1c) + geom_density(aes(x=hba1c_percent, color=substr(code, 0, 3)))  + theme_minimal()
+```
+
+# BMI
+
+```{r, message=F, warning=F}
+#Extract height, weight, and BMI
+hwbmi <- gp_clinical %>%
+  filter(grepl(height_weight_BMI_codes, code)) %>%
+  mutate(value = coalesce(as.numeric(value1), as.numeric(value2), as.numeric(value3))) %>%
+  filter(!is.na(value) & value > 0) %>%
+  mutate(trait = ifelse(grepl("BMI|Body Mass Index", term_description, ignore.case=T), "BMI",
+                        ifelse(grepl("Height", term_description, ignore.case=T), "Height",
+                               "Weight"))) %>%
+  mutate(value = ifelse(trait == "Height" & value > 2.1, value/100, value)) %>% #cm to meters
+  filter((trait == "Weight" & value < 200 & value > 30) |
+         (trait == "Height" & value < 2.1 & value > 1.25 )|
+         (trait == "BMI" & value < 75 & value > 12))
+
+#Here are the resulting terms:
+hwbmi %>% group_by(code, term_description, trait) %>% 
+  summarize(n = n(), mean=round(mean(value), 1)) %>% 
+  arrange(trait, desc(n)) %>% kable()
+
+#Check distributions
+weight <- hwbmi %>% filter(trait == "Weight") %>% 
+  arrange(eid, event_dt)
+height <- hwbmi %>% filter(trait == "Height") %>% 
+  arrange(eid, event_dt)
+BMI <- hwbmi %>% filter(trait == "BMI") %>% 
+  arrange(eid, event_dt)
+bmi_extra <- weight %>% 
+  filter(data_provider == 2) %>% 
+  mutate(bmi_extra = as.numeric(value3)) %>% 
+  filter(!is.na(bmi_extra)) %>%
+  filter(bmi_extra > 12)
+
+ggplot(data=weight, aes(x=value, color= substr(code, 0, 3))) + geom_density() + theme_minimal() + labs(title = "Weight")
+ggplot(data=height, aes(x=value, color = code)) + geom_density() + theme_minimal() + labs(title = "Height")
+ggplot(data=BMI, aes(x=value, color = substr(code, 0, 3))) + geom_density() + theme_minimal() + labs(title = "BMI")
+
+#combine
+weight_pre <- weight %>% select(-c(terminology, value1, value2, value3, trait)) %>%
+  dplyr::rename(weight = value, weight_code = code, weight_term_description = term_description)
+height_pre <- height %>% select(-c(terminology, value1, value2, value3, trait))  %>%
+  dplyr::rename(height = value, height_code = code, height_term_description = term_description)
+BMI_pre <- BMI %>% select(-c(terminology, value1, value2, value3, trait))  %>%
+  dplyr::rename(BMI = value, BMI_code = code, BMI_term_description = term_description)
+bmi_extra_pre <- bmi_extra %>% select(-c(terminology, term_description, value1, value2, value3, trait, value)) %>%
+  dplyr::rename(bmi_extra_code = code)
+
+joined_bmi <- full_join(weight_pre, height_pre) %>%
+              full_join(BMI_pre) %>%
+              full_join(bmi_extra_pre)
+
+#clean
+cleaned_bmi <- joined_bmi %>%
+  group_by(eid) %>%
+  fill(height, .direction = "downup") %>%
+  mutate(BMI_coalesce = round(coalesce(BMI, bmi_extra), 1),
+         BMI_calculated = round(weight/(height^2), 1),
+         BMI_mismatch = BMI_coalesce != BMI_calculated, 
+         BMI_diff = BMI_coalesce - BMI_calculated) %>%
+  filter(!(!is.na(BMI_diff) & abs(BMI_diff) > 1.5)) %>%
+  mutate(BMI_final = coalesce(BMI_calculated, BMI_coalesce)) %>%
+  mutate(height = ifelse(!is.na(height), height, sqrt(weight/BMI))) %>%
+  dplyr::rename(BMI_reported = BMI_coalesce, height_carried = height) %>%
+  filter(height_carried < 2.1 & height_carried > 1.25 & BMI_final < 75 & BMI_final > 12) %>%
+  select(eid, data_provider, event_dt, weight, height_carried, BMI_reported, BMI_calculated, BMI = BMI_final) %>% 
+  distinct() %>%
+  mutate(source="PC")
+
+```
+
+# Write tables 
+
+```{r}
+# fwrite(full_bp_clean, paste0(pheno_dir, "pc_biomarkers/bp_primarycare_clean_labeled.txt"), row.names = F, sep = "\t", quote=T)
+#
+# fwrite(totchol %>% 
+#               dplyr::select(eid, totchol, event_dt, data_provider, code, terminology, term_description) %>% distinct(), 
+#             paste0(pheno_dir, "pc_biomarkers/totchol.txt"), row.names=F, sep="\t", quote=T)
+# 
+# fwrite(HDL %>% 
+#               select(eid, HDL, event_dt, data_provider, code, terminology, term_description) %>% distinct(), 
+#             paste0(pheno_dir, "pc_biomarkers/HDL.txt"), row.names=F, sep="\t", quote=T)
+# 
+# fwrite(LDL %>% 
+#               select(eid, LDL, event_dt, data_provider, code, terminology, term_description) %>% distinct(), 
+#             paste0(pheno_dir, "pc_biomarkers/LDL.txt"), row.names=F, sep="\t", quote=T)
+# 
+# fwrite(triglycerides %>% 
+#               select(eid, triglyc, event_dt, data_provider, code, terminology, term_description) %>% distinct(), 
+#             paste0(pheno_dir, "pc_biomarkers/triglycerides.txt"), row.names=F, sep="\t", quote=T)
+# 
+# fwrite(fastgluc %>%
+#             select(eid, fastgluc, event_dt, data_provider, code, terminology, term_description) %>% distinct(),
+#             paste0(pheno_dir, "pc_biomarkers/fasting_glucose_clean_all.txt"), row.names=F, sep="\t", quote=T)
+# 
+# fwrite(randgluc %>%
+#             select(eid, randgluc, event_dt, data_provider, code, terminology, term_description) %>% distinct(),
+#             paste0(pheno_dir, "pc_biomarkers/random_glucose_clean_all.txt"), row.names=F, sep="\t", quote=T)
+# 
+# fwrite(a1c, paste0(pheno_dir, "pc_biomarkers/hba1c.txt", row.names=F, sep = "\t", quote = T))
+#
+# fwrite(cleaned_bmi, paste0(pheno_dir, "pc_biomarkers/cleaned_bmi_height_weight.txt"), sep = "\t", row.names=F) 
+
+```
+
+

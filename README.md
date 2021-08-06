@@ -1,6 +1,6 @@
-# TrajGWAS-reproduce
+# TrajGWAS reproducibility 
 
 Scripts to reproduce the experiments performed for the TrajGWAS manuscript. 
 
-- simulation : scripts for reproducing simulation studies
-- ukbiobank : scripts for UK Biobank data analyses
+- Simulation : scripts for reproducing simulation studies
+- Ukbiobank : scripts for UK Biobank data analyses

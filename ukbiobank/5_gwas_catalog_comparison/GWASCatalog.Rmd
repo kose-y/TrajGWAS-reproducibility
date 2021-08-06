@@ -1,0 +1,1062 @@
+---
+title: "GWAS Catalog Analysis"
+author: "Jin"
+date: "7/8/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Load packages 
+```{r}
+#remotes::install_github("ramiromagno/gwasrapidd")
+# git: https://github.com/ramiromagno/gwasrapidd
+# tutorial: https://rmagno.eu/gwasrapidd/articles/gwasrapidd.html
+# paper: https://academic.oup.com/bioinformatics/article/36/2/649/5543089 
+library(gwasrapidd)
+library(tidyverse)
+library(readr)
+library(tibble)
+library(liftOver)
+
+within1Mb <- function(snp_dat, catalog_dat) {
+  # snp_dat is a row of TrajGWAS output
+  if(is_tibble(snp_dat)) {
+    snp_dat = snp_dat %>% slice(1) %>% as.numeric()
+  }
+  check = catalog_dat %>% 
+    filter(chr == snp_dat[1]) %>% 
+    mutate(snp_pos = snp_dat[2]) 
+  check = check %>% mutate(within = 
+                             ifelse(snp_pos > pos - 1000000 & snp_pos < pos + 1000000, 1, 0)) %>% 
+    dplyr::select(within)
+  return(sum(check$within, na.rm=T))
+}
+pat <- "(\\d)+"
+
+replicated <- function(snp_dat, marker) {
+############################################################
+# snp_dat is a row in catalog data tibble with column name: 
+############################################################
+      # snpid      
+      # risk_allele 
+      # risk_frequency 
+      # merged 
+      # functional_class     
+      # chr 
+      # chromosome_position 
+      # chromosome_region 
+      # last_update_date
+  check = marker %>% filter(chr == snp_dat$chr & pos == snp_dat$chromosome_position)
+  if(dim(check)[1] > 0) {
+      snp_dat  = bind_cols(snp_dat, check) %>% 
+                    mutate(replicate_beta = 
+                             ifelse(betapval < 0.05),
+                           replicate_tau = 
+                             ifelse(taupval < 0.05),
+                           replicate_either = 
+                             ifelse(betapval < 0.05 | taupval < 0.05)) 
+  }else{
+    snp_dat  = snp_dat %>%  mutate(replicate_beta = NA,
+                             replicate_tau = NA,
+                             replicate_either = NA) 
+  }
+
+  return(check)
+}
+```
+
+### Read in data and reformt 
+- If SNPs do not have rs number, we re-define their names as "chrx:yyy", where x is the chromosome number and yyy is the BP location
+```{r, eval = F}
+#setwd("/Users/jzdimhou/Box/vGWAS/results/ukb_bgen/")
+# tot_chol_anno <- read_delim("gwas_totchol.txt", delim = "\t")
+tot_chol <- read_csv("/Users/jzhou/Box/vGWAS/results/ukb_bgen/cholesterol_results/results/ukbbgen_totchol_allsubjs_updatedspa_r075.csv")
+tot_chol2 <- tot_chol %>% filter(maf > 0.002)
+tot_chol2 <- tot_chol2 %>%  mutate(snpid = ifelse(str_detect(snpid, ":"), 
+                                        str_c(str_c("chr", str_split_fixed(snpid, ":", n = 2)[,1], sep=""), 
+                                                           str_split_fixed(snpid, ":|_", n = 3)[,2], sep=":"), 
+                                        snpid))
+rm(tot_chol)
+gc()
+
+hdl <- read_csv("/Users/jzhou/Box/vGWAS/results/ukb_bgen/cholesterol_results/results/ukbbgen_hdl_allsubjs_updatedspa_r075.csv")
+hdl2 <- hdl %>% filter(maf > 0.002) 
+hdl2 <- hdl2 %>%  mutate(snpid = ifelse(str_detect(snpid, ":"), 
+                                        str_c(str_c("chr", str_split_fixed(snpid, ":", n = 2)[,1], sep=""), 
+                                                           str_split_fixed(snpid, ":|_", n = 3)[,2], sep=":"), 
+                                        snpid))
+rm(hdl)
+gc()
+
+ldl <- read_csv("/Users/jzhou/Box/vGWAS/results/ukb_bgen/cholesterol_results/results/ukbbgen_ldl_allsubjs_updatedspa_r075.csv")
+ldl2 <- ldl %>% filter(maf > 0.002)
+ldl2 <- ldl2 %>%  mutate(snpid = ifelse(str_detect(snpid, ":"), 
+                                        str_c(str_c("chr", str_split_fixed(snpid, ":", n = 2)[,1], sep=""), 
+                                                           str_split_fixed(snpid, ":|_", n = 3)[,2], sep=":"), 
+                                        snpid))
+rm(ldl)
+gc()
+
+sbp <- read_csv("/Users/jzhou/Box/vGWAS/results/ukb_bgen/bp/sbp.run5_final2.all.csv")
+sbp2 <- sbp %>% filter(maf > 0.002)
+sbp2 <- sbp2 %>%  mutate(snpid = ifelse(str_detect(snpid, ":"), 
+                                        str_c(str_c("chr", str_split_fixed(snpid, ":", n = 2)[,1], sep=""), 
+                                                           str_split_fixed(snpid, ":|_", n = 3)[,2], sep=":"), 
+                                        snpid))
+rm(sbp)
+gc()
+
+dbp <- read_csv("/Users/jzhou/Box/vGWAS/results/ukb_bgen/bp/dbp.run5_final2.all.csv")
+dbp2 <- dbp %>% filter(maf > 0.002)
+dbp2 <- dbp2 %>%  mutate(snpid = ifelse(str_detect(snpid, ":"), 
+                                        str_c(str_c("chr", str_split_fixed(snpid, ":", n = 2)[,1], sep=""), 
+                                                           str_split_fixed(snpid, ":|_", n = 3)[,2], sep=":"), 
+                                        snpid))
+rm(dbp)
+gc()
+
+pbp <- read_csv("/Users/jzhou/Box/vGWAS/results/ukb_bgen/bp/pbp.run5_final2.all.csv")
+pbp2 <- pbp %>% filter(maf > 0.002)
+pbp2 <- pbp2 %>%  mutate(snpid = ifelse(str_detect(snpid, ":"), 
+                                        str_c(str_c("chr", str_split_fixed(snpid, ":", n = 2)[,1], sep=""), 
+                                                           str_split_fixed(snpid, ":|_", n = 3)[,2], sep=":"), 
+                                        snpid))
+rm(pbp)
+gc()
+
+hba1c <- read_delim("/Users/jzhou/Box/vGWAS/results/ukb_bgen/HbA1c/indicatorbeta/allsubjs/SPA/result.hba1c.indicatorbeta.allsubjs.SPA.all.txt", delim = "\t")
+# hba1c <- read_delim("HbA1c/indicatorboth/allsubjs/SPA/result.hba1c.indicatorboth.allsubjs.SPA.all.txt", delim = "\t")
+hba1c2 <- hba1c %>% filter(maf > 0.002)
+hba1c2 <- hba1c2 %>%  mutate(snpid = ifelse(str_detect(snpid, ":"), 
+                                        str_c(str_c("chr", str_split_fixed(snpid, ":", n = 2)[,1], sep=""), 
+                                                           str_split_fixed(snpid, ":|_", n = 3)[,2], sep=":"), 
+                                        snpid))
+rm(hba1c)
+gc()
+
+
+# trig <- read_delim("triglycerides/indicatorbeta/allsubjs/SPA/result.triglycerides.indicatorbeta.allsubjs.SPA.all.txt", delim = "\t")
+trig <- read_delim("/Users/jzhou/Box/vGWAS/results/ukb_bgen/triglycerides/indicatorboth/allsubjs/SPA/result.triglycerides.indicatorboth.allsubjs.SPA.all.txt", delim = "\t", col_names = F)
+names(trig) <- names(hba1c2)
+trig2 <- trig %>% filter(maf > 0.002)
+trig2 <- trig2 %>%  mutate(snpid = ifelse(str_detect(snpid, ":"), 
+                                        str_c(str_c("chr", str_split_fixed(snpid, ":", n = 2)[,1], sep=""), 
+                                                           str_split_fixed(snpid, ":|_", n = 3)[,2], sep=":"), 
+                                        snpid))
+rm(trig)
+gc()
+ 
+# fpg <- read_delim("glucose/fast/indicatorbeta/allsubjs/SPA/result.glucose_fast.indicatorbeta.allsubjs.SPA.all.txt", delim = "\t")
+# fpg <- read_delim("/glucose/fast/indicatorboth/allsubjs/SPA/result.glucose_fast.indicatorboth.allsubjs.SPA.all.txt", delim = "\t")
+fpg <- read_delim("/Users/jzhou/Box/vGWAS/results/ukb_bgen/glucose/fast/indicatorbeta_withdiabetesstatus/allsubjs/SPA/result.glucose_fast.indicatorbeta_withdiabetesstatus.allsubjs.SPA.all.txt", delim = "\t")
+fpg2 <- fpg %>% filter(maf > 0.002)
+fpg2 <- fpg2 %>%  mutate(snpid = ifelse(str_detect(snpid, ":"), 
+                                        str_c(str_c("chr", str_split_fixed(snpid, ":", n = 2)[,1], sep=""), 
+                                                           str_split_fixed(snpid, ":|_", n = 3)[,2], sep=":"), 
+                                        snpid))
+rm(fpg)
+gc()
+
+# glu <- read_delim("glucose/nonfast/indicatorbeta/allsubjs/SPA/result.glucose_nonfast.indicatorbeta.allsubjs.SPA.all.txt", delim = "\t")
+# glu <- read_delim("glucose/nonfast/indicatorboth/allsubjs/SPA/result.glucose_nonfast.indicatorboth.allsubjs.SPA.all.txt", delim = "\t") 
+glu <- read_delim("/Users/jzhou/Box/vGWAS/results/ukb_bgen/glucose/nonfast/indicatorbeta_withdiabetesstatus/allsubjs/SPA/result.glucose_nonfast.indicatorbeta_withdiabetesstatus.allsubjs.SPA.all.txt", delim = "\t")
+glu2 <- glu %>% filter(maf > 0.002)
+glu2 <- glu2 %>%  mutate(snpid = ifelse(str_detect(snpid, ":"), 
+                                        str_c(str_c("chr", str_split_fixed(snpid, ":", n = 2)[,1], sep=""), 
+                                                           str_split_fixed(snpid, ":|_", n = 3)[,2], sep=":"), 
+                                        snpid))
+rm(glu)
+gc()
+
+bmi <- read_delim("/Users/jzhou/Box/vGWAS/results/ukb_bgen/BMI/result.BMI.allsubjs.SPA.all.txt", delim = "\t")
+bmi2 <- bmi %>% filter(maf > 0.002)
+bmi2 <- glu2 %>%  mutate(snpid = ifelse(str_detect(snpid, ":"), 
+                                        str_c(str_c("chr", str_split_fixed(snpid, ":", n = 2)[,1], sep=""), 
+                                                           str_split_fixed(snpid, ":|_", n = 3)[,2], sep=":"), 
+                                        snpid))
+rm(bmi)
+gc()
+```
+
+### Extract SNPs from [GWAS catalog]<https://www.ebi.ac.uk/gwas/> using trait names 
+- Total cholesterol
+```{r, eval = F}
+# need to check the exact phenotype names used in the gwas catalog
+# my_studies <- get_studies(efo_trait = 'total cholesterol measurement')
+# my_associations <-  get_associations(study_id = my_studies@studies$study_id)
+
+my_associations <-  get_associations(efo_trait = 'total cholesterol measurement')
+variants <- get_variants(efo_trait = 'total cholesterol measurement')
+
+dplyr::filter(my_associations@associations, pvalue < 5*1e-8) %>% # Filter by p-value
+  tidyr::drop_na(pvalue) %>%
+  dplyr::pull(association_id) -> association_ids # Extract column association_id
+my_associations2 <- my_associations[association_ids]
+catalog <- my_associations2@risk_alleles[c('variant_id', 'risk_allele', 'risk_frequency')] 
+catalog_tc <- catalog %>% 
+  rename(snpid = variant_id) %>% 
+  distinct(snpid, .keep_all = TRUE)
+
+variants2 <- variants@variants %>% 
+  rename(snpid = variant_id)  %>% 
+  distinct(snpid, .keep_all = TRUE)
+
+catalog_tc <- catalog_tc %>% 
+  left_join(variants2, by = "snpid")  
+  
+catalog_tc <- catalog_tc %>%  
+  mutate(chromosome_name = ifelse(str_detect(snpid, ":"), 
+                                  str_extract(str_split_fixed(snpid, ":", n = 2)[,1], pat), 
+                                  chromosome_name),
+                                  chromosome_name = as.numeric(chromosome_name)) %>% 
+  arrange(chromosome_name, chromosome_position) %>% 
+  filter(!is.na(chromosome_name)) %>% 
+  rename(chr = chromosome_name)
+```
+
+- LDL
+```{r, eval = F}
+my_associations <-  get_associations(efo_trait = 'low density lipoprotein cholesterol measurement')
+variants <- get_variants(efo_trait = 'low density lipoprotein cholesterol measurement')
+
+dplyr::filter(my_associations@associations, pvalue < 5*1e-8) %>% # Filter by p-value
+  tidyr::drop_na(pvalue) %>%
+  dplyr::pull(association_id) -> association_ids # Extract column association_id
+my_associations2 <- my_associations[association_ids]
+catalog <- my_associations2@risk_alleles[c('variant_id', 'risk_allele', 'risk_frequency')] 
+
+catalog_ldl <- catalog %>% 
+  dplyr::rename(snpid = variant_id) %>% 
+  dplyr::distinct(snpid, .keep_all = TRUE)
+
+variants2 <- variants@variants %>% 
+  dplyr::rename(snpid = variant_id)  %>% 
+  dplyr::distinct(snpid, .keep_all = TRUE)
+
+catalog_ldl <- catalog_ldl %>% 
+  left_join(variants2, by = "snpid")  
+  
+catalog_ldl <- catalog_ldl %>%  
+  mutate(chromosome_name = ifelse(str_detect(snpid, ":"), 
+                                  str_extract(str_split_fixed(snpid, ":", n = 2)[,1], pat), 
+                                  chromosome_name),
+                                  chromosome_name = as.numeric(chromosome_name)) %>% 
+  arrange(chromosome_name, chromosome_position) %>% 
+  filter(!is.na(chromosome_name)) %>% 
+  dplyr:: rename(chr = chromosome_name)
+```
+
+- HDL
+```{r, eval = F}
+my_associations <-  get_associations(efo_trait = 'high density lipoprotein cholesterol measurement')
+variants <- get_variants(efo_trait = 'high density lipoprotein cholesterol measurement')
+
+dplyr::filter(my_associations@associations, pvalue < 5*1e-8) %>% # Filter by p-value
+  tidyr::drop_na(pvalue) %>%
+  dplyr::pull(association_id) -> association_ids # Extract column association_id
+my_associations2 <- my_associations[association_ids]
+catalog <- my_associations2@risk_alleles[c('variant_id', 'risk_allele', 'risk_frequency')] 
+
+catalog_hdl <- catalog %>% 
+  rename(snpid = variant_id) %>% 
+  distinct(snpid, .keep_all = TRUE)
+
+variants2 <- variants@variants %>% 
+  rename(snpid = variant_id)  %>% 
+  distinct(snpid, .keep_all = TRUE)
+
+pat <- "(\\d)+"
+catalog_hdl <- catalog_hdl %>% 
+  left_join(variants2, by = "snpid")  
+  
+catalog_hdl <- catalog_hdl %>%  mutate(chromosome_name = ifelse(str_detect(snpid, ":"), 
+                                  str_extract(str_split_fixed(snpid, ":", n = 2)[,1], pat), 
+                                  chromosome_name),
+                                  chromosome_name = as.numeric(chromosome_name)) %>% 
+  arrange(chromosome_name, chromosome_position) %>% 
+  filter(!is.na(chromosome_name))
+catalog_hdl <- catalog_hdl %>% rename(chr = chromosome_name)
+```
+
+
+- SBP
+```{r, eval = F}
+my_associations <-  get_associations(efo_trait = 'systolic blood pressure')
+variants <- get_variants(efo_trait = 'systolic blood pressure')
+
+dplyr::filter(my_associations@associations, pvalue < 5*1e-8) %>% # Filter by p-value
+  tidyr::drop_na(pvalue) %>%
+  dplyr::pull(association_id) -> association_ids # Extract column association_id
+my_associations2 <- my_associations[association_ids]
+catalog <- my_associations2@risk_alleles[c('variant_id', 'risk_allele', 'risk_frequency')] 
+
+catalog_sbp <- catalog %>% 
+  rename(snpid = variant_id) %>% 
+  distinct(snpid, .keep_all = TRUE)
+
+variants2 <- variants@variants %>% 
+  rename(snpid = variant_id)  %>% 
+  distinct(snpid, .keep_all = TRUE)
+
+pat <- "(\\d)+"
+catalog_sbp <- catalog_sbp %>% 
+  left_join(variants2, by = "snpid")  
+  
+catalog_sbp <- catalog_sbp %>%  mutate(chromosome_name = ifelse(str_detect(snpid, ":"), 
+                                  str_extract(str_split_fixed(snpid, ":", n = 2)[,1], pat), 
+                                  chromosome_name),
+                                  chromosome_name = as.numeric(chromosome_name)) %>% 
+  arrange(chromosome_name, chromosome_position) %>% 
+  filter(!is.na(chromosome_name))
+
+catalog_sbp <- catalog_sbp %>% rename(chr = chromosome_name)
+```
+
+- DBP
+```{r, eval = F}
+my_associations <-  get_associations(efo_trait = 'diastolic blood pressure')
+variants <- get_variants(efo_trait = 'diastolic blood pressure')
+
+dplyr::filter(my_associations@associations, pvalue < 5*1e-8) %>% # Filter by p-value
+  tidyr::drop_na(pvalue) %>%
+  dplyr::pull(association_id) -> association_ids # Extract column association_id
+my_associations2 <- my_associations[association_ids]
+catalog <- my_associations2@risk_alleles[c('variant_id', 'risk_allele', 'risk_frequency')] 
+
+catalog_dbp <- catalog %>% 
+  rename(snpid = variant_id) %>% 
+  distinct(snpid, .keep_all = TRUE)
+
+variants2 <- variants@variants %>% 
+  rename(snpid = variant_id)  %>% 
+  distinct(snpid, .keep_all = TRUE)
+
+catalog_dbp <- catalog_dbp %>% 
+  left_join(variants2, by = "snpid")  
+  
+catalog_dbp <- catalog_dbp %>%  mutate(chromosome_name = ifelse(str_detect(snpid, ":"), 
+                                  str_extract(str_split_fixed(snpid, ":", n = 2)[,1], pat), 
+                                  chromosome_name),
+                                  chromosome_name = as.numeric(chromosome_name)) %>% 
+  arrange(chromosome_name, chromosome_position) %>% 
+  filter(!is.na(chromosome_name))
+
+catalog_dbp <- catalog_dbp %>% rename(chr = chromosome_name)
+```
+
+- Pulse pressure
+```{r, eval = F}
+my_associations <-  get_associations(efo_trait = 'pulse pressure measurement')
+variants <- get_variants(efo_trait = 'pulse pressure measurement')
+
+dplyr::filter(my_associations@associations, pvalue < 5*1e-8) %>% # Filter by p-value
+  tidyr::drop_na(pvalue) %>%
+  dplyr::pull(association_id) -> association_ids # Extract column association_id
+my_associations2 <- my_associations[association_ids]
+catalog <- my_associations2@risk_alleles[c('variant_id', 'risk_allele', 'risk_frequency')] 
+
+catalog_pbp <- catalog %>% 
+  rename(snpid = variant_id) %>% 
+  distinct(snpid, .keep_all = TRUE)
+
+variants2 <- variants@variants %>% 
+  rename(snpid = variant_id)  %>% 
+  distinct(snpid, .keep_all = TRUE)
+
+catalog_pbp <- catalog_pbp %>% 
+  left_join(variants2, by = "snpid")  
+  
+catalog_pbp <- catalog_pbp %>%  mutate(chromosome_name = ifelse(str_detect(snpid, ":"), 
+                                  str_extract(str_split_fixed(snpid, ":", n = 2)[,1], pat), 
+                                  chromosome_name),
+                                  chromosome_name = as.numeric(chromosome_name)) %>% 
+  arrange(chromosome_name, chromosome_position) %>% 
+  filter(!is.na(chromosome_name))
+
+catalog_pbp <- catalog_pbp %>% rename(chr = chromosome_name)
+```
+
+- Triglyceride
+```{r, eval = F}
+my_associations <-  get_associations(efo_trait = 'triglyceride measurement')
+variants <- get_variants(efo_trait = 'triglyceride measurement')
+
+variants2 <- variants@variants %>% 
+  rename(snpid = variant_id)  %>% 
+  distinct(snpid, .keep_all = TRUE)
+
+dplyr::filter(my_associations@associations, pvalue < 5*1e-8) %>% # Filter by p-value
+  tidyr::drop_na(pvalue) %>%
+  dplyr::pull(association_id) -> association_ids # Extract column association_id
+my_associations2 <- my_associations[association_ids]
+catalog <- my_associations2@risk_alleles[c('variant_id', 'risk_allele', 'risk_frequency')] 
+
+catalog_trig <- catalog %>% 
+  rename(snpid = variant_id) %>% 
+  distinct(snpid, .keep_all = TRUE)
+
+catalog_trig <- catalog_trig %>% 
+  left_join(variants2, by = "snpid")  
+  
+catalog_trig <- catalog_trig %>%  mutate(chromosome_name = ifelse(str_detect(snpid, ":"), 
+                                  str_extract(str_split_fixed(snpid, ":", n = 2)[,1], pat), 
+                                  chromosome_name),
+                                  chromosome_name = as.numeric(chromosome_name)) %>% 
+  arrange(chromosome_name, chromosome_position) %>% 
+  filter(!is.na(chromosome_name))
+
+catalog_trig <- catalog_trig %>% rename(chr = chromosome_name)
+```
+
+- HbA1c
+```{r, eval = F}
+my_associations <-  get_associations(efo_trait = 'HbA1c measurement')
+variants <- get_variants(efo_trait = 'HbA1c measurement')
+
+variants2 <- variants@variants %>% 
+  rename(snpid = variant_id)  %>% 
+  distinct(snpid, .keep_all = TRUE)
+
+dplyr::filter(my_associations@associations, pvalue < 5*1e-8) %>% # Filter by p-value
+  tidyr::drop_na(pvalue) %>%
+  dplyr::pull(association_id) -> association_ids # Extract column association_id
+my_associations2 <- my_associations[association_ids]
+catalog <- my_associations2@risk_alleles[c('variant_id', 'risk_allele', 'risk_frequency')] 
+
+catalog_hba1c <- catalog %>% 
+  rename(snpid = variant_id) %>% 
+  distinct(snpid, .keep_all = TRUE)
+
+catalog_hba1c <- catalog_hba1c %>% 
+  left_join(variants2, by = "snpid")  
+  
+catalog_hba1c  <- catalog_hba1c %>%  mutate(chromosome_name = ifelse(str_detect(snpid, ":"), 
+                                  str_extract(str_split_fixed(snpid, ":", n = 2)[,1], pat), 
+                                  chromosome_name),
+                                  chromosome_name = as.numeric(chromosome_name)) %>% 
+  arrange(chromosome_name, chromosome_position) %>% 
+  filter(!is.na(chromosome_name))
+
+catalog_hba1c <- catalog_hba1c %>% rename(chr = chromosome_name)
+```
+- Fasting glucose
+```{r, eval = F}
+my_associations <-  get_associations(efo_trait = 'fasting blood glucose measurement')
+variants <- get_variants(efo_trait = 'fasting blood glucose measurement')
+
+variants2 <- variants@variants %>% 
+  rename(snpid = variant_id)  %>% 
+  distinct(snpid, .keep_all = TRUE)
+
+dplyr::filter(my_associations@associations, pvalue < 5*1e-8) %>% # Filter by p-value
+  tidyr::drop_na(pvalue) %>%
+  dplyr::pull(association_id) -> association_ids # Extract column association_id
+my_associations2 <- my_associations[association_ids]
+catalog <- my_associations2@risk_alleles[c('variant_id', 'risk_allele', 'risk_frequency')] 
+
+catalog_fpg <- catalog %>% 
+  rename(snpid = variant_id) %>% 
+  distinct(snpid, .keep_all = TRUE)
+
+catalog_fpg <- catalog_fpg %>% 
+  left_join(variants2, by = "snpid")  
+  
+catalog_fpg  <- catalog_fpg %>%  mutate(chromosome_name = ifelse(str_detect(snpid, ":"), 
+                                  str_extract(str_split_fixed(snpid, ":", n = 2)[,1], pat), 
+                                  chromosome_name),
+                                  chromosome_name = as.numeric(chromosome_name)) %>% 
+  arrange(chromosome_name, chromosome_position) %>% 
+  filter(!is.na(chromosome_name))
+
+catalog_fpg <- catalog_fpg %>% rename(chr = chromosome_name)
+```
+
+- Random glucose
+```{r, eval = F}
+my_associations <-  get_associations(efo_trait = 'glucose measurement')
+variants <- get_variants(efo_trait = 'glucose measurement')
+
+variants2 <- variants@variants %>% 
+  rename(snpid = variant_id)  %>% 
+  distinct(snpid, .keep_all = TRUE)
+
+dplyr::filter(my_associations@associations, pvalue < 5e-8) %>% # Filter by p-value
+  tidyr::drop_na(pvalue) %>%
+  dplyr::pull(association_id) -> association_ids # Extract column association_id
+my_associations2 <- my_associations[association_ids]
+catalog <- my_associations2@risk_alleles[c('variant_id', 'risk_allele', 'risk_frequency')] 
+
+catalog_glu <- catalog %>% 
+  rename(snpid = variant_id) %>% 
+  distinct(snpid, .keep_all = TRUE)
+
+catalog_glu <- catalog_glu %>% 
+  left_join(variants2, by = "snpid")  
+  
+catalog_glu  <- catalog_glu %>%  mutate(chromosome_name = ifelse(str_detect(snpid, ":"), 
+                                  str_extract(str_split_fixed(snpid, ":", n = 2)[,1], pat), 
+                                  chromosome_name),
+                                  chromosome_name = as.numeric(chromosome_name)) %>% 
+  arrange(chromosome_name, chromosome_position) %>% 
+  filter(!is.na(chromosome_name))
+
+catalog_glu <- catalog_glu %>% rename(chr = chromosome_name)
+```
+
+- BMI
+```{r, eval = F}
+my_associations <-  get_associations(efo_trait = 'body mass index')
+variants <- get_variants(efo_trait = 'body mass index')
+
+variants2 <- variants@variants %>% 
+  dplyr::rename(snpid = variant_id)  %>% 
+  distinct(snpid, .keep_all = TRUE)
+
+dplyr::filter(my_associations@associations, pvalue < 5e-8) %>% # Filter by p-value
+  tidyr::drop_na(pvalue) %>%
+  dplyr::pull(association_id) -> association_ids # Extract column association_id
+my_associations2 <- my_associations[association_ids]
+catalog <- my_associations2@risk_alleles[c('variant_id', 'risk_allele')] 
+
+catalog_bmi1 <- catalog %>% 
+  dplyr::rename(snpid = variant_id) %>% 
+  distinct(snpid, .keep_all = TRUE)
+
+catalog_bmi1 <- catalog_bmi1 %>% 
+  left_join(variants2, by = "snpid")  
+```
+
+```{r}
+my_associations <-  get_associations(efo_trait = 'longitudinal BMI measurement')
+variants <- get_variants(efo_trait = 'longitudinal BMI measurement')
+
+variants2 <- variants@variants %>% 
+  dplyr::rename(snpid = variant_id)  %>% 
+  distinct(snpid, .keep_all = TRUE)
+
+dplyr::filter(my_associations@associations, pvalue < 5e-8) %>% # Filter by p-value
+  tidyr::drop_na(pvalue) %>%
+  dplyr::pull(association_id) -> association_ids # Extract column association_id
+my_associations2 <- my_associations[association_ids]
+catalog <- my_associations2@risk_alleles[c('variant_id', 'risk_allele')] 
+
+catalog_bmi2 <- catalog %>% 
+  dplyr::rename(snpid = variant_id) %>% 
+  distinct(snpid, .keep_all = TRUE)
+
+catalog_bmi2 <- catalog_bmi2 %>% 
+  left_join(variants2, by = "snpid") 
+```
+
+```{r}
+catalog_bmi <- bind_rows(catalog_bmi1, catalog_bmi2)
+
+catalog_bmi  <- catalog_bmi %>%  mutate(chromosome_name = ifelse(str_detect(snpid, ":"), 
+                                  str_extract(str_split_fixed(snpid, ":", n = 2)[,1], pat), 
+                                  chromosome_name),
+                                  chromosome_name = as.numeric(chromosome_name)) %>% 
+  arrange(chromosome_name, chromosome_position) %>% 
+  filter(!is.na(chromosome_name))
+
+catalog_bmi <- catalog_bmi %>% 
+  dplyr :: rename(chr = chromosome_name) %>%
+  distinct(snpid, .keep_all = TRUE)
+```
+
+
+- Save data to RDS 
+```{r, eval = F}
+save.image("./ukb_results_with_catalog.RData")
+```
+
+```{r}
+load("/Users/jzhou/Box/vGWAS/results/ukb_bgen/ukb_results_with_catalog.RData")
+```
+
+
+```{r}
+# Loading the file with the information on how to liftover from hg38 to hg19
+chain_file <- system.file(package="liftOver", "extdata", "hg38ToHg19.over.chain")
+ch <- rtracklayer::import.chain(chain_file)
+  
+hg38_to_hg19 <- function(catalog_dat38){
+  # For some reason, sometimes, GWAS Catalog does not have the genomic coordinates of some
+  # of the variants; these cannot be obviously lifted over, so are here eliminated.
+  variants_to_be_kept <- which(!is.na(catalog_dat38$chr) & !is.na(catalog_dat38$chromosome_position))
+
+  # Using gwasrapidd subsetting by position to keep only those variants for which there is 
+  # genomic coordinates.
+  catalog_dat38_2 <- catalog_dat38[variants_to_be_kept,]
+
+  # To check how many variants we lost:
+  message('There are ', dim(catalog_dat38)[1], ' variants in catalog. But ', dim(catalog_dat38_2)[1], ' has coorindates.')
+
+
+  # Make a GRanges object from the genomic positions (hg38 assembly)
+  gr_hg38 <- GRanges(
+  seqnames = as(catalog_dat38_2$chr, "Rle"),
+  ranges = IRanges(start = catalog_dat38_2$chromosome_position, 
+                   end = catalog_dat38_2$chromosome_position, 
+                   names = catalog_dat38_2$snpid),
+  strand = "*"
+  )
+
+  ## Performing the actual liftover from hg38 to hg19
+  GenomeInfoDb::seqlevelsStyle(gr_hg38) <- "UCSC"  # necessary
+  gr_hg19 <- unlist(rtracklayer::liftOver(gr_hg38, ch))
+
+  diff <- setdiff(names(gr_hg38), names(gr_hg19))
+  message('There are ', length(diff), ' variants lost in the liftover from hg38 to hg19: ', paste(diff, collapse=", "), '.')
+  #> There are 3 variants lost in the liftover from hg38 to hg19: rs1839069, rs386000, rs453755.
+
+  catalog_hg19 <- as.data.frame(gr_hg19) %>%
+    dplyr::as_tibble(gr_hg19, rownames = 'snpid') %>%
+    dplyr::mutate(chr = stringr::str_remove(seqnames, '^chr'),
+                pos = start) %>%
+    dplyr::select(snpid, chr, pos)
+  return(catalog_hg19)
+}
+
+catalog_sbp_hg19 <- hg38_to_hg19(catalog_sbp)
+catalog_dbp_hg19 <- hg38_to_hg19(catalog_dbp)
+catalog_pbp_hg19 <- hg38_to_hg19(catalog_pbp)
+catalog_tc_hg19 <- hg38_to_hg19(catalog_tc)
+catalog_ldl_hg19 <- hg38_to_hg19(catalog_ldl)
+catalog_hdl_hg19 <- hg38_to_hg19(catalog_hdl)
+catalog_trig_hg19 <- hg38_to_hg19(catalog_trig)
+catalog_hba1c_hg19 <- hg38_to_hg19(catalog_hba1c)
+catalog_fpg_hg19 <- hg38_to_hg19(catalog_fpg)
+catalog_glu_hg19 <- hg38_to_hg19(catalog_glu)
+catalog_bmi_hg19 <- hg38_to_hg19(catalog_bmi)
+```
+
+```{r}
+catalog_tc_hg19_all <- catalog_tc_hg19 %>% 
+  dplyr :: select(-chr, -pos) %>% 
+  left_join(tot_chol2, by = "snpid") %>% filter(!is.na(chr)) %>%
+  mutate(replicated = ifelse(betapval < 0.05, 1, 0))
+
+tmp <- tot_chol2 %>% 
+  filter(betapval < 5e-8) %>% 
+  dplyr::select(chr, pos) %>% 
+  arrange(chr, pos)
+overlap = apply(tmp, 1, within1Mb, catalog_dat = catalog_tc_hg19)
+tc_sigbeta <- tot_chol2 %>% 
+  filter(betapval < 5e-8) %>% 
+  dplyr::select(chr, pos, snpid) %>% 
+  arrange(chr, pos) %>%
+  mutate(nonoverlap = ifelse(overlap > 0, 0, 1))
+
+tmp <- tot_chol2 %>% 
+  filter(taupval < 5e-8) %>%
+  dplyr:: select(chr, pos) %>% 
+  arrange(chr, pos)
+overlap = apply(tmp, 1, within1Mb, catalog_dat = catalog_tc_hg19)
+tc_sigtau <- tot_chol2 %>% 
+  filter(taupval < 5e-8) %>%
+  dplyr:: select(chr, pos, snpid) %>% 
+  arrange(chr, pos) %>%
+  mutate(nonoverlap = ifelse(overlap > 0, 0, 1))
+
+```
+
+```{r}
+catalog_hdl_hg19_all <- catalog_hdl_hg19 %>% 
+  dplyr :: select(-chr, -pos) %>% 
+  left_join(hdl2, by = "snpid") %>% 
+  filter(!is.na(chr)) %>%
+  mutate(replicated = ifelse(betapval < 0.05, 1, 0))
+
+tmp <- hdl2 %>% filter(betapval < 5e-8) %>% 
+  dplyr :: select(chr, pos) %>% 
+  arrange(chr, pos)
+overlap = apply(tmp, 1, within1Mb, catalog_dat = catalog_hdl_hg19)
+
+hdl_sigbeta <- hdl2 %>% filter(betapval < 5e-8) %>% 
+  dplyr :: select(chr, pos, snpid) %>% 
+  arrange(chr, pos) %>%
+  mutate(nonoverlap = ifelse(overlap > 0, 0, 1))
+
+```
+
+```{r}
+catalog_ldl_hg19_all <- catalog_ldl_hg19 %>% 
+  dplyr :: select(-chr, -pos) %>% 
+  left_join(ldl2, by = "snpid") %>% filter(!is.na(chr)) %>%
+  mutate(replicated = ifelse(betapval < 0.05, 1, 0))
+
+tmp <- ldl2 %>% 
+  filter(betapval < 5e-8) %>% 
+  dplyr::select(chr, pos) %>% 
+  arrange(chr, pos)
+overlap = apply(tmp, 1, within1Mb, catalog_dat = catalog_ldl_hg19)
+
+ldl_sigbeta <- ldl2 %>% 
+  filter(betapval < 5e-8) %>% 
+  dplyr::select(chr, pos, snpid) %>% 
+  arrange(chr, pos) %>% 
+  mutate(nonoverlap = ifelse(overlap > 0, 0, 1))
+
+tmp <- ldl2 %>% 
+  filter(taupval < 5e-8) %>%
+  dplyr:: select(chr, pos) %>% 
+  arrange(chr, pos)
+overlap = apply(tmp, 1, within1Mb, catalog_dat = catalog_ldl_hg19)
+ldl_sigtau <- ldl2 %>% 
+  filter(taupval < 5e-8) %>%
+  dplyr:: select(chr, pos, snpid) %>% 
+  arrange(chr, pos) %>%
+  mutate(nonoverlap = ifelse(overlap > 0, 0, 1))
+```
+
+```{r}
+catalog_sbp_hg19_all <- catalog_sbp_hg19 %>% 
+  dplyr :: select(-chr, -pos) %>% 
+  left_join(sbp2, by = "snpid") %>% filter(!is.na(chr)) %>%
+  mutate(replicated = ifelse(betapval < 0.05, 1, 0))
+
+tmp <- sbp2 %>% 
+  filter(betapval < 5e-8) %>% 
+  dplyr::select(chr, pos) %>% 
+  arrange(chr, pos)
+overlap = apply(tmp, 1, within1Mb, catalog_dat = catalog_sbp_hg19)
+sbp_sigbeta <- sbp2 %>% 
+  filter(betapval < 5e-8) %>% 
+  dplyr::select(chr, pos, snpid) %>% 
+  arrange(chr, pos) %>%
+  mutate(nonoverlap = ifelse(overlap > 0, 0, 1))
+
+tmp <- sbp2 %>% 
+  filter(taupval < 5e-8) %>%
+  dplyr:: select(chr, pos) %>% 
+  arrange(chr, pos)
+overlap = apply(tmp, 1, within1Mb, catalog_dat = catalog_sbp_hg19)
+sbp_sigtau <- sbp2 %>% 
+  filter(taupval < 5e-8) %>%
+  dplyr:: select(chr, pos, snpid) %>% 
+  arrange(chr, pos) %>%
+  mutate(nonoverlap = ifelse(overlap > 0, 0, 1))
+```
+
+```{r}
+catalog_dbp_hg19_all <- catalog_dbp_hg19 %>% 
+  dplyr :: select(-chr, -pos) %>% 
+  left_join(dbp2, by = "snpid") %>% filter(!is.na(chr)) %>%
+  mutate(replicated = ifelse(betapval < 0.05, 1, 0))
+
+tmp <- dbp2 %>% 
+  filter(betapval < 5e-8) %>% 
+  dplyr::select(chr, pos) %>% 
+  arrange(chr, pos)
+overlap = apply(tmp, 1, within1Mb, catalog_dat = catalog_dbp_hg19)
+dbp_sigbeta <- dbp2 %>% 
+  filter(betapval < 5e-8) %>% 
+  dplyr::select(chr, pos, snpid) %>% 
+  arrange(chr, pos) %>% 
+  mutate(nonoverlap = ifelse(overlap > 0, 0, 1))
+
+tmp <- dbp2 %>% 
+  filter(taupval < 5e-8) %>%
+  dplyr:: select(chr, pos) %>% 
+  arrange(chr, pos)
+overlap = apply(tmp, 1, within1Mb, catalog_dat = catalog_dbp_hg19)
+dbp_sigtau <- dbp2 %>% 
+  filter(taupval < 5e-8) %>%
+  dplyr:: select(chr, pos, snpid) %>% 
+  arrange(chr, pos) %>%
+  mutate(nonoverlap = ifelse(overlap > 0, 0, 1))
+```
+
+```{r}
+catalog_pbp_hg19_all <- catalog_pbp_hg19 %>% 
+  dplyr :: select(-chr, -pos) %>% 
+  left_join(pbp2, by = "snpid") %>% filter(!is.na(chr)) %>%
+  mutate(replicated = ifelse(betapval < 0.05, 1, 0))
+
+tmp <- pbp2 %>% 
+  filter(betapval < 5e-8) %>% 
+  dplyr::select(chr, pos) %>% 
+  arrange(chr, pos)
+overlap = apply(tmp, 1, within1Mb, catalog_dat = catalog_pbp_hg19)
+pbp_sigbeta <- pbp2 %>% 
+  filter(betapval < 5e-8) %>% 
+  dplyr::select(chr, pos, snpid) %>% 
+  arrange(chr, pos) %>%
+  mutate(nonoverlap = ifelse(overlap > 0, 0, 1))
+
+tmp <- pbp2 %>% 
+  filter(taupval < 5e-8) %>%
+  dplyr:: select(chr, pos) %>% 
+  arrange(chr, pos)
+overlap = apply(tmp, 1, within1Mb, catalog_dat = catalog_pbp_hg19)
+pbp_sigtau <- pbp2 %>% 
+  filter(taupval < 5e-8) %>%
+  dplyr:: select(chr, pos, snpid) %>% 
+  arrange(chr, pos) %>%
+  mutate(nonoverlap = ifelse(overlap > 0, 0, 1))
+```
+
+```{r}
+catalog_trig_hg19_all <- catalog_trig_hg19 %>% 
+  dplyr :: select(-chr, -pos) %>% 
+  left_join(trig2, by = "snpid") %>% filter(!is.na(chr)) %>%
+  mutate(replicated = ifelse(betapval < 0.05, 1, 0))
+
+tmp <- trig2 %>% 
+  filter(betapval < 5e-8) %>% 
+  dplyr::select(chr, pos) %>% 
+  arrange(chr, pos)
+overlap = apply(tmp, 1, within1Mb, catalog_dat = catalog_trig_hg19)
+trig_sigbeta <- trig2 %>% 
+  filter(betapval < 5e-8) %>% 
+  dplyr::select(chr, pos) %>% 
+  arrange(chr, pos) %>%
+  mutate(nonoverlap = ifelse(overlap > 0, 0, 1))
+
+tmp <- trig2 %>% 
+  filter(taupval < 5e-8) %>%
+  dplyr:: select(chr, pos) %>% 
+  arrange(chr, pos)
+overlap = apply(tmp, 1, within1Mb, catalog_dat = catalog_trig_hg19)
+trig_sigtau <- trig2 %>% 
+  filter(taupval < 5e-8) %>%
+  dplyr:: select(chr, pos) %>% 
+  arrange(chr, pos) %>%
+  mutate(nonoverlap = ifelse(overlap > 0, 0, 1))
+```
+
+```{r}
+catalog_hba1c_hg19_all <- catalog_hba1c_hg19 %>% 
+  dplyr :: select(-chr, -pos) %>% 
+  left_join(hba1c2, by = "snpid") %>% filter(!is.na(chr)) %>%
+  mutate(replicated = ifelse(betapval < 0.05, 1, 0))
+
+tmp <- hba1c2 %>% 
+  filter(betapval < 5e-8) %>% 
+  dplyr::select(chr, pos) %>% 
+  arrange(chr, pos)
+overlap = apply(tmp, 1, within1Mb, catalog_dat = catalog_hba1c_hg19)
+hba1c_sigbeta <- hba1c2 %>% 
+  filter(betapval < 5e-8) %>% 
+  dplyr::select(chr, pos, snpid) %>% 
+  arrange(chr, pos) %>% 
+  mutate(nonoverlap = ifelse(overlap > 0, 0, 1))
+
+tmp <- hba1c2 %>% 
+  filter(taupval < 5e-8) %>%
+  dplyr:: select(chr, pos, snpid) %>% 
+  arrange(chr, pos)
+overlap = apply(tmp, 1, within1Mb, catalog_dat = catalog_hba1c_hg19)
+hba1c_sigtau <- hba1c2 %>% 
+  filter(taupval < 5e-8) %>%
+  dplyr:: select(chr, pos, snpid) %>% 
+  arrange(chr, pos) %>% 
+  mutate(nonoverlap = ifelse(overlap > 0, 0, 1))
+```
+
+```{r}
+catalog_fpg_hg19_all <- catalog_fpg_hg19 %>% 
+  dplyr :: select(-chr, -pos) %>% 
+  left_join(fpg2, by = "snpid") %>% filter(!is.na(chr)) %>%
+  mutate(replicated = ifelse(betapval < 0.05, 1, 0))
+
+tmp <- fpg2 %>% 
+  filter(betapval < 5e-8) %>% 
+  dplyr::select(chr, pos) %>% 
+  arrange(chr, pos)
+overlap = apply(tmp, 1, within1Mb, catalog_dat = catalog_fpg_hg19)
+fpg_sigbeta <- fpg2 %>% 
+  filter(betapval < 5e-8) %>% 
+  dplyr::select(chr, pos, snpid) %>% 
+  arrange(chr, pos) %>%
+  mutate(nonoverlap = ifelse(overlap > 0, 0, 1))
+
+tmp <- fpg2 %>% 
+  filter(taupval < 5e-8) %>%
+  dplyr:: select(chr, pos) %>% 
+  arrange(chr, pos)
+overlap = apply(tmp, 1, within1Mb, catalog_dat = catalog_fpg_hg19)
+fpg_sigtau <- fpg2 %>% 
+  filter(taupval < 5e-8) %>%
+  dplyr:: select(chr, pos, snpid) %>% 
+  arrange(chr, pos) %>%
+  mutate(nonoverlap = ifelse(overlap > 0, 0, 1))
+```
+
+```{r}
+catalog_glu_hg19_all <- catalog_glu_hg19 %>% 
+  dplyr :: select(-chr, -pos) %>% 
+  left_join(glu2, by = "snpid") %>% filter(!is.na(chr)) %>%
+  mutate(replicated = ifelse(betapval < 0.05, 1, 0))
+
+tmp <- glu2 %>% 
+  filter(betapval < 5e-8) %>% 
+  dplyr::select(chr, pos) %>% 
+  arrange(chr, pos)
+overlap = apply(tmp, 1, within1Mb, catalog_dat = catalog_glu_hg19)
+
+glu_sigbeta <- glu2 %>% 
+  filter(betapval < 5e-8) %>% 
+  dplyr::select(chr, pos, snpid) %>% 
+  arrange(chr, pos) %>%
+  mutate(nonoverlap = ifelse(overlap > 0, 0, 1))
+
+tmp <- glu2 %>% 
+  filter(taupval < 5e-8) %>%
+  dplyr:: select(chr, pos, snpid) %>% 
+  arrange(chr, pos)
+overlap = apply(tmp, 1, within1Mb, catalog_dat = catalog_glu_hg19)
+glu_sigtau <- glu2 %>% 
+  filter(taupval < 5e-8) %>%
+  dplyr:: select(chr, pos, snpid) %>% 
+  arrange(chr, pos) %>%
+  mutate(nonoverlap = ifelse(overlap > 0, 0, 1))
+```
+
+
+```{r}
+catalog_bmi_hg19_all <- catalog_bmi_hg19 %>% 
+  dplyr :: select(-chr, -pos) %>% 
+  left_join(bmi2, by = "snpid") %>% filter(!is.na(chr)) %>%
+  mutate(replicated = ifelse(betapval < 0.05, 1, 0))
+
+tmp <- bmi2 %>% 
+  filter(betapval < 5e-8) %>% 
+  dplyr::select(chr, pos) %>% 
+  arrange(chr, pos)
+overlap = apply(tmp, 1, within1Mb, catalog_dat = catalog_bmi_hg19)
+
+bmi_sigbeta <- glu2 %>% 
+  filter(betapval < 5e-8) %>% 
+  dplyr::select(chr, pos, snpid) %>% 
+  arrange(chr, pos) %>%
+  mutate(nonoverlap = ifelse(overlap > 0, 0, 1))
+
+tmp <- bmi2 %>% 
+  filter(taupval < 5e-8) %>%
+  dplyr:: select(chr, pos, snpid) %>% 
+  arrange(chr, pos)
+overlap = apply(tmp, 1, within1Mb, catalog_dat = catalog_bmi_hg19)
+bmi_sigtau <- glu2 %>% 
+  filter(taupval < 5e-8) %>%
+  dplyr:: select(chr, pos, snpid) %>% 
+  arrange(chr, pos) %>%
+  mutate(nonoverlap = ifelse(overlap > 0, 0, 1))
+```
+
+```{r}
+out <- bind_rows(sbp_sigbeta %>% filter(nonoverlap>0) %>% mutate(trait_label = "SBP", beta = "Yes"),
+          sbp_sigtau %>% filter(nonoverlap>0) %>% mutate(trait_label = "SBP", beta = "No"),
+          dbp_sigbeta %>% filter(nonoverlap>0) %>% mutate(trait_label = "DBP", beta = "Yes"),
+          dbp_sigtau %>% filter(nonoverlap>0) %>% mutate(trait_label = "DBP", beta = "No"),
+          pbp_sigbeta %>% filter(nonoverlap>0) %>% mutate(trait_label = "PBP", beta = "Yes"),
+          pbp_sigtau %>% filter(nonoverlap>0) %>% mutate(trait_label = "PBP", beta = "No"),
+          tc_sigbeta %>% filter(nonoverlap>0) %>% mutate(trait_label = "TC", beta = "Yes"),
+          tc_sigtau %>% filter(nonoverlap>0) %>% mutate(trait_label = "TC", beta = "No"),
+          hdl_sigbeta %>% filter(nonoverlap>0) %>% mutate(trait_label = "SBP", beta = "Yes"),
+          ldl_sigbeta %>% filter(nonoverlap>0) %>% mutate(trait_label = "LDL", beta = "Yes"),
+          ldl_sigtau %>% filter(nonoverlap>0) %>% mutate(trait_label = "LDL", beta = "No"),
+          hba1c_sigbeta %>% filter(nonoverlap>0) %>% mutate(trait_label = "HbA1c", beta = "Yes"),
+          hba1c_sigtau %>% filter(nonoverlap>0) %>% mutate(trait_label = "HbA1c", beta = "No"),
+          trig_sigbeta %>% filter(nonoverlap>0) %>% mutate(trait_label = "Triglycerides", beta = "Yes"),
+          trig_sigtau %>% filter(nonoverlap>0) %>% mutate(trait_label = "Triglycerides", beta = "No"),
+          glu_sigbeta %>% filter(nonoverlap>0) %>% mutate(trait_label = "Random Glucose", beta = "Yes"),
+          glu_sigtau %>% filter(nonoverlap>0) %>% mutate(trait_label = "Random Glucose", beta = "No"),
+          fpg_sigbeta %>% filter(nonoverlap>0) %>% mutate(trait_label = "Fasting Glucose", beta = "Yes"),
+          fpg_sigtau %>% filter(nonoverlap>0) %>% mutate(trait_label = "Fasting Glucose", beta = "No") #,
+          #bmi_sigbeta %>% filter(nonoverlap>0) %>% mutate(trait_label = "BMI", beta = "Yes"),
+          #bmi_sigtau %>% filter(nonoverlap>0) %>% mutate(trait_label = "BMI", beta = "No"),
+          ) %>% dplyr :: select(-nonoverlap)
+write_csv(out, file = "/Users/jzhou/Box/vGWAS/results/ukb_bgen/novel.csv")
+```
+
+```{r}
+out_sbp = str_c("SBP &", 
+                "EFO\\_0006335 &",
+                paste(dim(sbp_sigbeta)[1], "/", dim(sbp_sigtau)[1]), "&", 
+                dim(catalog_sbp_hg19)[1], "&", 
+                round(sum(catalog_sbp_hg19_all$replicated)/dim(catalog_sbp_hg19_all)[1]*100, 2), "\\% & ",
+                sum(sbp_sigbeta$nonoverlap), " / ", sum(sbp_sigtau$nonoverlap), " \\\\", 
+                sep = "")
+
+out_dbp = str_c("DBP &", 
+                "EFO\\_0006336 &",
+                paste(dim(dbp_sigbeta)[1], "/", dim(dbp_sigtau)[1]), "&", 
+                dim(catalog_dbp_hg19)[1], "&", 
+                round(sum(catalog_dbp_hg19_all$replicated)/dim(catalog_dbp_hg19_all)[1]*100, 2), "\\% & ",
+                sum(dbp_sigbeta$nonoverlap), " / ", sum(dbp_sigtau$nonoverlap), " \\\\", 
+                sep = "")
+
+out_pbp = str_c("PBP &", 
+                "EFO\\_0005763 &",
+                paste(dim(pbp_sigbeta)[1], "/", dim(pbp_sigtau)[1]), "&", 
+                dim(catalog_pbp_hg19)[1], "&", 
+                round(sum(catalog_pbp_hg19_all$replicated)/dim(catalog_pbp_hg19_all)[1]*100, 2), "\\% & ",
+                sum(pbp_sigbeta$nonoverlap), " / ", sum(pbp_sigtau$nonoverlap), " \\\\", 
+                sep = "")
+
+out_hdl = str_c("HDL &", 
+                "EFO\\_0004612 &",
+                paste(dim(hdl_sigbeta)[1], "/", "0"), "&", 
+                dim(catalog_hdl_hg19)[1], "&", 
+                round(sum(catalog_hdl_hg19_all$replicated)/dim(catalog_hdl_hg19_all)[1]*100, 2), "\\% & ",
+                sum(hdl_sigbeta$nonoverlap), " / ", "0", " \\\\", 
+                sep = "")
+
+out_ldl = str_c("LDL &", 
+                "EFO\\_0004611 &",
+                paste(dim(ldl_sigbeta)[1], "/", dim(ldl_sigtau)[1]), "&", 
+                dim(catalog_ldl_hg19)[1], "&", 
+                round(sum(catalog_ldl_hg19_all$replicated)/dim(catalog_ldl_hg19_all)[1]*100, 2), "\\% & ",
+                sum(ldl_sigbeta$nonoverlap), " / ", sum(ldl_sigtau$nonoverlap), " \\\\", 
+                sep = "")
+
+out_tc = str_c("Total Cholesterol &", 
+                "EFO\\_0004574 &",
+                paste(dim(tc_sigbeta)[1], "/", dim(tc_sigtau)[1]), "&", 
+                dim(catalog_tc_hg19)[1], "&", 
+                round(sum(catalog_tc_hg19_all$replicated)/dim(catalog_tc_hg19_all)[1]*100, 2), "\\% & ",
+                sum(tc_sigbeta$nonoverlap), " / ", sum(tc_sigtau$nonoverlap), " \\\\", 
+                sep = "")
+
+out_trig = str_c("Triglyceride &", 
+                "EFO\\_0004530 &",
+                paste(dim(trig_sigbeta)[1], "/", dim(trig_sigtau)[1]), "&", 
+                dim(catalog_trig_hg19)[1], "&", 
+                round(sum(catalog_trig_hg19_all$replicated)/dim(catalog_trig_hg19_all)[1]*100, 2), "\\% & ",
+                sum(trig_sigbeta$nonoverlap), " / ", sum(trig_sigtau$nonoverlap), " \\\\", 
+                sep = "")
+
+
+out_hba1c = str_c("HbA1c &", 
+                "EFO\\_0004541 &",
+                paste(dim(hba1c_sigbeta)[1], " / ", dim(hba1c_sigtau)[1]), "&", 
+                dim(catalog_hba1c_hg19)[1], "&", 
+                round(sum(catalog_hba1c_hg19_all$replicated)/dim(catalog_hba1c_hg19_all)[1]*100, 2), "\\% & ",
+                sum(hba1c_sigbeta$nonoverlap), " / ", sum(hba1c_sigtau$nonoverlap), " \\\\", 
+                sep = "")
+
+
+out_fpg = str_c("Fasting glucose &", 
+                "EFO\\_0004465 &",
+                paste(dim(fpg_sigbeta)[1], " / ", dim(fpg_sigtau)[1]), "&", 
+                dim(catalog_fpg_hg19)[1], "&", 
+                round(sum(catalog_fpg_hg19_all$replicated)/dim(catalog_fpg_hg19_all)[1]*100, 2), "\\% & ",
+                sum(fpg_sigbeta$nonoverlap), " / ", sum(fpg_sigtau$nonoverlap), " \\\\", 
+                sep = "")
+
+out_glu = str_c("Random glucose &", 
+                "EFO\\_0004468 &",
+                paste(dim(glu_sigbeta)[1], " / ", dim(glu_sigtau)[1]), "&", 
+                dim(catalog_glu_hg19)[1], "&", 
+                round(sum(catalog_glu_hg19_all$replicated)/dim(catalog_glu_hg19_all)[1]*100, 2), "\\% & ",
+                sum(glu_sigbeta$nonoverlap), " / ", sum(glu_sigtau$nonoverlap), " \\\\", 
+                sep = "")
+
+
+out <- paste(out_sbp, out_dbp, out_pbp, out_hdl, out_ldl, out_tc, out_trig, out_hba1c, out_fpg, out_glu, sep="\n")
+cat(out)
+```

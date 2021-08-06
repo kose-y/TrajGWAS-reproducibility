@@ -1,0 +1,5 @@
+## Scripts for Simulation studies
+
+To reproduce the environments used for the experiments, launch julia with `--project=<path-to-this directory>` and run `using Pkg; Pkg.instantiate()`. 
+
+Note: The package was named `vGWAS` at the time of experiments. Using the commands above sets the name of the package as `vGWAS`. The package names should be changed to `TrajGWAS`, and the function `vgwas` should be changed to `trajgwas` for the use with the current version of `TrajGWAS.jl`.

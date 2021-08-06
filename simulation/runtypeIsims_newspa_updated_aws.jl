@@ -1,3 +1,5 @@
+# The simulations were run on AWS EC2 using AWS ParallelCluster, with Sun Grid Engine.
+# 128 c6g.xlarge instances.
 conditions = [[6000, 6:10, 0.01], 
 	      [6000, 6:10, 0.05],
 	      [6000, 6:10, 0.30], 

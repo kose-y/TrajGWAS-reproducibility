@@ -1,10 +1,12 @@
 ---
 title: "Biomarker extraction from primary care for TrajGWAS"
-output: html_notebook
+output:
+  html_document:
+    df_print: paged
 ---
 
 This Rmd extracts biomarkers from primary care data to be used in TrajGWAS analysis.
-```{r}
+```{r, warning=F}
 #Provide the path of the config file
 source("/xdisk/jzhou/aubreyjensen/UKB_48152/pheno/scripts/config.R")
 ```
@@ -15,7 +17,6 @@ library(data.table)
 library(tictoc)
 library(knitr)
 library(tictoc)
-library(ggplot2)
 library(tidyr)
 ```
 
@@ -35,7 +36,7 @@ gp_clinical_n <- fread(paste0(record_dir, "gp_clinical_summary.txt")) %>%
   distinct()
 ```
 
-Define the clinical terms to extract from gp_clinical for each biomarker. Each biomarker gets a string to be used in a grepl pattern matching query, and as such different patterns should be separated by '|', and brackets used to denote multiple possible patterns to match.
+Define the clinical terms to extract from gp_clinical for each biomarker. Each biomarker gets a string to be used in a grepl pattern matching query, and as such different patterns should be separated by '|', brackets used to denote multiple possible patterns to match, and '^' to denote the beginning of the string.
 ```{r}
 BP_codes <- "^246[.cdgABCDEFGJNPQRSTVWXY012345679]|^XaF4[abFLOS]|^XaJ2[EFGH]|^XaKF[xw]|^G20"
 HDL_codes <- '^44d[23]|^X772M|^44P[5BC]|^XaEVr'
@@ -43,9 +44,9 @@ LDL_codes <- '^44d[45]|^X772N|^44P[6DE]|^XaEVs'   #X772N does not return anythin
 totchol_codes <- "^44P[.12349HJKZ]|^XE2eD|^XSK14|^XaFs9|^XaIRd|^XaJe9|^XaLux" 
 triglyc_codes <- '^44e|^44Q|^X772O|^XE2q9' 
 fastgluc_codes <- "^44[fg]1"
-randgluc_codes <- "^44[fg][0\\.]|^44TA|XM0ly"
+randgluc_codes <- "^44[fg][0\\.]|^44TA|^XM0ly"
 a1c_codes <- "^XaPbt|^XaERp|^X772q|^42W[12345Z\\.]\\.|^44TB\\."
-height_weight_BMI_codes <- "^XaCDR|^XaJJH|^XaJqk|^XaZcl|^22K|^229|^22A|^162[23]|X76CG|XE1h4|XM01G|Xa7wI"
+height_weight_BMI_codes <- "^XaCDR|^XaJJH|^XaJqk|^XaZcl|^22K|^229|^22A|^162[23]|^X76CG|^XE1h4|^XM01G|^Xa7wI"
 ```
 
 # BP
@@ -154,8 +155,6 @@ totchol <- gp_clinical %>%
                          "mmol", "mmol/d", "mOsm/kg", "mPa/s", "nmol/l", "U/mL", "umol/L")))
 
 totchol %>% group_by(code, term_description) %>% summarize(n=n()) %>% arrange(desc(n)) %>% kable()
-
-ggplot(data=totchol) + geom_density(aes(x=totchol, color= substr(code, 0,3))) + xlim(0,10) + theme_minimal()
 ```
 
 # HDL
@@ -168,8 +167,6 @@ HDL <- gp_clinical %>%
   filter(!(value3 %in% c("09", "MEA082", "MEA095", "MEA099", "MEA104", "MEA151", "mmol", "mOsm/kg", "mg/mmol")))
 
 HDL %>% group_by(code, term_description) %>% summarize(n=n()) %>% arrange(desc(n)) %>% kable()
-
-ggplot(data=HDL) + geom_density(aes(x=HDL, color= substr(code, 0,3))) + xlim(0,7.5) + theme_minimal()
 ```
 
 # LDL
@@ -182,8 +179,6 @@ LDL <- gp_clinical %>%
   filter(!(value3 %in% c("MEA142", "MEA151")))
 
 LDL %>% group_by(code, term_description) %>% summarize(n=n()) %>% arrange(desc(n)) %>% kable()
-
-ggplot(data=LDL) + geom_density(aes(x=LDL, color= substr(code, 0,3))) + xlim(0,10) + theme_minimal()
 ```
 
 # Triglycerides
@@ -196,7 +191,6 @@ triglycerides <- gp_clinical %>%
   filter(!(value3 %in% c("g", "g/l", "MEA099", "MEA156")))
 
 triglycerides %>% group_by(code, term_description) %>% summarize(n=n()) %>% arrange(desc(n)) %>% kable()
-ggplot(data=triglycerides) + geom_density(aes(x=triglyc, color= substr(code, 0,3))) + xlim(0,7.5) + theme_minimal()
 ```
 
 # Fasting Glucose
@@ -209,12 +203,10 @@ fastgluc <- gp_clinical %>%
   filter(value3 %in% c("", "MEA000", "MEA061", "MEA096", "MEA194", "Mmol/L", "Unknown", "mmol/L", "mmol/l", "mU/l", "units"))
 
 fastgluc %>% group_by(code, term_description) %>% summarize(n=n()) %>% arrange(desc(n)) %>% kable()
-
-ggplot(data=fastgluc) + geom_density(aes(x=fastgluc, color= substr(code, 0,3))) + xlim(0,20) + theme_minimal()
 ```
 
 # Random glucose
-```{r}
+```{r, message=F, warning=F}
 randgluc <- gp_clinical %>%
   filter(grepl(randgluc_codes, code)) %>% 
   mutate(value1_numeric = as.numeric(value1), value2_numeric = as.numeric(value2), value3_numeric = as.numeric(value3)) %>%
@@ -223,12 +215,10 @@ randgluc <- gp_clinical %>%
   filter(value3 %in% c("", "MEA000", "MEA061", "MEA096", "MEA194", "Mmol/L", "Unknown", "mmol/L", "mmol/l", "mU/l", "units"))
 
 randgluc %>% group_by(code, term_description) %>% summarize(n=n()) %>% arrange(desc(n)) %>% kable()
-
-ggplot(data=randgluc) + geom_density(aes(x=randgluc, color= substr(code, 0,3))) + xlim(0,30) + theme_minimal()
 ```
 
 # HbA1c
-```{r}
+```{r, message=F, warning=F}
 a1c <- gp_clinical %>%
   filter(grepl(a1c_codes, code)) %>%
   mutate(value1_numeric = as.numeric(value1), value2_numeric = as.numeric(value2), value3_numeric = as.numeric(value3)) %>%
@@ -244,8 +234,6 @@ a1c <- gp_clinical %>%
   mutate(hba1c_mmol_mol = ifelse(units =="%", round(10.929 * (hba1c - 2.15), 1), round(hba1c, 1))) %>%
   filter(hba1c_percent > 4 & hba1c_percent < 18) %>%
   dplyr::rename(original_unit = units)
-
-ggplot(data=a1c) + geom_density(aes(x=hba1c_percent, color=substr(code, 0, 3)))  + theme_minimal()
 ```
 
 # BMI
@@ -269,7 +257,7 @@ hwbmi %>% group_by(code, term_description, trait) %>%
   summarize(n = n(), mean=round(mean(value), 1)) %>% 
   arrange(trait, desc(n)) %>% kable()
 
-#Check distributions
+#Separate
 weight <- hwbmi %>% filter(trait == "Weight") %>% 
   arrange(eid, event_dt)
 height <- hwbmi %>% filter(trait == "Height") %>% 
@@ -281,10 +269,6 @@ bmi_extra <- weight %>%
   mutate(bmi_extra = as.numeric(value3)) %>% 
   filter(!is.na(bmi_extra)) %>%
   filter(bmi_extra > 12)
-
-ggplot(data=weight, aes(x=value, color= substr(code, 0, 3))) + geom_density() + theme_minimal() + labs(title = "Weight")
-ggplot(data=height, aes(x=value, color = code)) + geom_density() + theme_minimal() + labs(title = "Height")
-ggplot(data=BMI, aes(x=value, color = substr(code, 0, 3))) + geom_density() + theme_minimal() + labs(title = "BMI")
 
 #combine
 weight_pre <- weight %>% select(-c(terminology, value1, value2, value3, trait)) %>%
@@ -319,10 +303,8 @@ cleaned_bmi <- joined_bmi %>%
 
 ```
 
-# Write tables 
-
-```{r}
-# fwrite(full_bp_clean, paste0(pheno_dir, "pc_biomarkers/bp_primarycare_clean_labeled.txt"), row.names = F, sep = "\t", quote=T)
+```{r, message=F, warning=F}
+# fwrite(full_bp_clean, paste0(pheno_dir, "pc_biomarkers/bp_labeled.txt"), row.names = F, sep = "\t", quote=T)
 #
 # fwrite(totchol %>% 
 #               dplyr::select(eid, totchol, event_dt, data_provider, code, terminology, term_description) %>% distinct(), 
@@ -342,16 +324,14 @@ cleaned_bmi <- joined_bmi %>%
 # 
 # fwrite(fastgluc %>%
 #             select(eid, fastgluc, event_dt, data_provider, code, terminology, term_description) %>% distinct(),
-#             paste0(pheno_dir, "pc_biomarkers/fasting_glucose_clean_all.txt"), row.names=F, sep="\t", quote=T)
+#             paste0(pheno_dir, "pc_biomarkers/fasting_glucose.txt"), row.names=F, sep="\t", quote=T)
 # 
 # fwrite(randgluc %>%
 #             select(eid, randgluc, event_dt, data_provider, code, terminology, term_description) %>% distinct(),
-#             paste0(pheno_dir, "pc_biomarkers/random_glucose_clean_all.txt"), row.names=F, sep="\t", quote=T)
+#             paste0(pheno_dir, "pc_biomarkers/random_glucose.txt"), row.names=F, sep="\t", quote=T)
 # 
 # fwrite(a1c, paste0(pheno_dir, "pc_biomarkers/hba1c.txt", row.names=F, sep = "\t", quote = T))
 #
-# fwrite(cleaned_bmi, paste0(pheno_dir, "pc_biomarkers/cleaned_bmi_height_weight.txt"), sep = "\t", row.names=F) 
-
+# fwrite(cleaned_bmi, paste0(pheno_dir, "pc_biomarkers/bmi_height_weight.txt"), sep = "\t", row.names=F) 
 ```
-
 

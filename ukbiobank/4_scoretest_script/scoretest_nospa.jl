@@ -1,6 +1,6 @@
 using DataFrames, CSV
 using Statistics
-using vGWAS
+using TrajGWAS
 using WiSER
 using LinearAlgebra
 using BGEN
@@ -63,7 +63,7 @@ nm.nis .= nm.nis[nullinds]
 nm.data .= nm.data[nullinds]
 @assert genetic_iids[sample_indicator] == nm.ids "there is some issue -- sampleids not matching"
 
-@time vgwas(nm, bgenfilename * ".bgen", count(sample_indicator);
+@time trajgwas(nm, bgenfilename * ".bgen", count(sample_indicator);
     samplepath=samplefilename,
     pvalfile=pvalfile,
     snpinds=snpmask,

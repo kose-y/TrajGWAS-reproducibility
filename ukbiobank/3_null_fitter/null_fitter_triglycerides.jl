@@ -5,6 +5,11 @@ using KNITRO
 import StatsBase: countmap
 # fit the null model
 solver = KNITRO.KnitroSolver(outlev=0) # outlev 0-6
+# can use other solvers e.g., 
+# Ipopt.IpoptSolver(print_level=0, mehrotra_algorithm = "yes", warm_start_init_point="yes", max_iter=100)
+# (for Ipopt version 0.8)
+# KNITRO (commercial software) is more efficient/stable/robust than other solvers
+
 
 tg_data = CSV.read("triglycerides_all.csv", DataFrame)
 #self insulin  in beta and tau

@@ -26,8 +26,6 @@ for index in 1:100
             println(io, "#\$ -o joblog.\$JOB_ID")
             println(io, "#\$ -j y")
             println(io, "#\$ -l h_rt=4:00:00") # request runtime and memory
-            println(io, "# Email address to notify")
-            println(io, "#\$ -M y3kkoseyoon@gmail.com")
             println(io, "# Notify when")
             println(io, "#\$ -m ea")
             println(io)

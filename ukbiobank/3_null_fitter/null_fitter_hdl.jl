@@ -7,6 +7,10 @@ using BGEN
 # fit the null model
 BLAS.set_num_threads(1)
 solver = KNITRO.KnitroSolver(outlev=0) # outlev 0-6
+# can use other solvers e.g., 
+# Ipopt.IpoptSolver(print_level=0, mehrotra_algorithm = "yes", warm_start_init_point="yes", max_iter=100)
+# (for Ipopt version 0.8)
+# KNITRO (commercial software) is more efficient/stable/robust than other solvers
 hdl_data_d = CSV.read("hdl_diabetics.csv", DataFrame)
 hdl_data_nd = CSV.read("hdl_nondiabetics.csv", DataFrame)
 hdl_data = vcat(hdl_data_d, hdl_data_nd)

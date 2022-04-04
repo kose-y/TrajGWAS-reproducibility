@@ -4,4 +4,3 @@
 - Then run `using Pkg; Pkg.instantiate()`. 
 
 Note: The package was named `vGWAS` at the time of experiments. The code has been updated to use `TrajGWAS` v0.1.2.
-
